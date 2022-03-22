@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "spraydryfs"
+version = "0.1.0"
+description = ""
+authors = ["florp <jens.krewald@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pyzstd = "^0.15.2"
+cachetools = "^5.0.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
