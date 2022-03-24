@@ -12,13 +12,13 @@ SprayDryFS attempts to square the read-only parts of the POSIX filesystem API
 with the notion of content-addressable, immutable storage. The lowest unit of
 storage is the chunk, identified by its hash and optionally compressed with a
 shared dictionary. A file is given by a list of chunks and identified by the
-hash of their concatenation; a directory is a file describing file names, at-
-tributes, and hashes. Mounting hooks are provided via roots, which are iden-
-tified by a name and version. With these mechanisms SprayDryFS is geared to-
-wards use cases that benefit from versioning and transparent deduplication.
+hash of their concatenation; a directory is a file describing file names,
+attributes, and hashes. Mounting hooks are provided via roots, which are
+identified by a name and version. With these mechanisms SprayDryFS is geared
+towards use cases that benefit from versioning and transparent deduplication.
 
-Encryption is not in the scope of SprayDryFS, but could conceivably be imple-
-mented as an outgrowth of chunk compression support.
+Encryption is not in the scope of SprayDryFS, but could conceivably be
+implemented as an outgrowth of chunk compression support.
 
 Implementation
 ==============
@@ -44,14 +44,14 @@ SprayDryFS should eventually support three modes of operation:
   present inside the database or acquired from outside sources
 
 At present only mounted mode is properly exposed. The prerequisites for the
-other two are present in the spraydryfs.spraydry and spraydryfs.rehydrate mo-
-dules. Additional possible modes of operation might be a networked mode, es-
-sentially acting as a key-value store mapping hashes to content, and an admin-
-istrative mode to compose and dissect existing roots into new ones.
+other two are present in the spraydryfs.spraydry and spraydryfs.rehydrate
+modules. Additional possible modes of operation might be a networked mode,
+essentially acting as a key-value store mapping hashes to content, and an
+administrative mode to compose and dissect existing roots into new ones.
 
 Language
 --------------
 
 Currently the entire filesystem is implemented in Python. With an eye towards
-portability and performance it will be desirable to create at least a read-
-only implementation in a compiled language.
+portability and performance it will be desirable to create at least a
+read-only implementation in a compiled language.
