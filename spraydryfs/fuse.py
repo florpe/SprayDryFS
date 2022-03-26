@@ -24,7 +24,7 @@ class SprayDryFS(Operations):
     def __init__(self, dbpath, rootname, rootversion, mmap=MMAP_DEFAULT, mount=None, logger=None, loglevel='INFO'):
         self._logger = logger if logger is not None else self._mklogger(loglevel)
         self._db = dbpath
-        self._mount = mount
+        self._mount = None if mount is None else mount.resolve(strict=True)
         self._rehydrator = Rehydrator(dbpath, mmap=MMAP_DEFAULT)
         self._root = self._rehydrator.root(rootname, rootversion)
         if self._root is None:
@@ -38,7 +38,11 @@ class SprayDryFS(Operations):
         fuseenable()
         fuse_options = set(default_options)
         fuse_options.add('fsname=spraydryfs')
-        fuseinit(self, self._mount, fuse_options)
+        fuseinit(
+            self
+            , str(self._mount) #Ideally this would take a Path
+            , fuse_options
+            )
         return self
     async def __aexit__(self, exc_type, exc, tb):
         self.close()

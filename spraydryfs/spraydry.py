@@ -10,7 +10,7 @@ from spraydryfs.db import connect
 
 
 class SprayDryStore():
-    def __init__(self, dbpath, mkhashobj, rehydratename):
+    def __init__(self, dbpath, mkhashobj, rehydratename, sprayconf=None, dryconf=None):
         self._db = dbpath
         self._mkhashobj = mkhashobj
         self._hashname = mkhashobj().name.encode('utf-8')
@@ -19,6 +19,8 @@ class SprayDryStore():
         self._rehydrate, self._sprayer, self._dryer = make_mksprayer_dryer(
             self._writer
             , rehydratename
+            , sprayconf
+            , dryconf
             )
     def savepoint(self, path):
         pathhsh = self._mkhashobj(bytes(path))
@@ -154,9 +156,7 @@ class SprayDryStore():
         else:
             raise ValueError('Unsupported file type', path, stat)
         return fileid, filehash, stat
-    def root(self, path, name, version):
-        if isinstance(path, str):
-            path = Path(path)
+    def root(self, name, version, path):
         realpath = path.resolve(strict=True)
         self._writer.execute('BEGIN')
         committed = False
@@ -181,12 +181,96 @@ class SprayDryStore():
 def make_modebytes(stat):
     return stat.st_mode.to_bytes(2, 'little')
 
-def make_mksprayer_dryer(conn, name):
+def make_rehydrate_entry(dbfile, name, sprayconf, dryconf, datasources):
+    with connect(dbfile) as conn:
+        return make_mksprayer_dryer(
+            conn
+            , name
+            , sprayconf
+            , dryconf
+            , datasources=datasources
+            )
+
+def make_mksprayer_dryer(conn, name, sprayconf, dryconf, datasources=None):
+    existing = conn.execute(
+        'SELECT id, chunking, algorithm, data FROM rehydrate WHERE name = ?'
+        , (name,)
+        ).fetchone()
+    if existing is not None:
+        rehydrateID, sprayconf_raw, dryconf_raw, data_raw = existing
+        if sprayconf is None:
+            sprayconf = algosplit(sprayconf_raw)
+        else:
+            assert algojoin(sprayconf) == sprayconf_raw
+        if dryconf is None:
+            dryconf = algosplit(dryconf_raw)
+        else:
+            assert dryconf == algosplit(dryconf_raw)
+        if datasources is None:
+            data = data_raw
+        else:
+            raise ValueError(
+                'Rehydrate configuration exists, no new training run will be done'
+                , sprayconf, dryconf, datasources
+                )
+    else:
+        if sprayconf is None or dryconf is None:
+            raise ValueError(
+                'No matching rehydration config found,' +
+                    ' cannot create a fresh one without required input.'
+                , sprayconf, dryconf, datasources
+                )
+        data = mkdata(conn, sprayconf, dryconf, datasources)
+        if data is None:
+            raise ValueError(
+                'Could not create appropriate rehydration data'
+                , sprayconf, dryconf, datasources
+                )
+        (rehydrateID,) = conn.execute(
+            '\n'.join([
+                'INSERT INTO rehydrate (name, chunking, algorithm, data)'
+                , 'VALUES (?,?,?,?)'
+                , 'RETURNING id'
+                ])
+            , (name, algojoin(sprayconf), algojoin(dryconf), data)
+            ).fetchone()
+    sprayer = make_sprayer(*sprayconf)
+    dryer = make_dryer(*dryconf, data)
+    return rehydrateID, sprayer, dryer
+
+def mkdata(conn, sprayconf, dryconf, datasources):
+    if any(isinstance(dsrc, str) for dsrc in datasources):
+        raise NotImplementedError(
+            'No data ingestion from existing roots yet'
+            , datasources
+            )
+    if dryconf[0] == 'nocompress':
+        return b''
+    raise NotImplementedError(
+        'Cannot create rehydration data'
+        , sprayconf, dryconf
+        )
+
+def make_dryer(name, params, data):
+    if name == 'nocompress':
+        return lambda x: x
+    if name == 'zstd':
+        #This only supports levels for now
+        compressdict = ZstdDict(data)
+        level = params.get('level')
+        compressor = ZstdCompressor(
+            level_or_option=(params if level is None else level)
+            , zstd_dict=compressdict
+            )
+        return  lambda x: compressor.compress(x, ZstdCompressor.FLUSH_FRAME)
+    raise ValueError('Unsupported algorithm for drying:', name)
+
+def make_mksprayer_dryer_old(conn, name):
     for rehydrateID, chunker, algorithm, data in conn.execute(
         'SELECT id, chunking, algorithm, data FROM rehydrate WHERE name = ?'
         , (name,)
         ):
-        sprayer = make_sprayer(chunker)
+        sprayer = make_sprayer(algosplit(chunker))
         algoname, algoparams = algosplit(algorithm)
         if algoname == 'nocompress':
             return rehydrateID, sprayer, lambda x: x
@@ -202,7 +286,7 @@ def make_mksprayer_dryer(conn, name):
         raise ValueError('Unsupported algorithm for drying:', algorithm)
 
 def algosplit(instr):
-    parts = instr.split()
+    parts = instr.strip().split()
     params = {
         k: int(v, 16) if v.startswith('0x') else v
         for k, v in [
@@ -212,25 +296,36 @@ def algosplit(instr):
         }
     return parts[0], params
     
+def algojoin(algo):
+    return ' '.join([
+        algo[0]
+        , *(
+            k + ':' + mkhex(v)
+            for k, v in sorted(algo[1].items())
+            )
+        ])
 
-def make_sprayer(chunkstr):
-    fields = chunkstr.split()
-    algorithm = fields[0]
-    params = {
-        fieldname: int(fieldval, 16)
-        for fieldname, fieldval in [
-            field.split(':')
-            for field in fields[1:]
-            ]
-        }
+def mkhex(inval):
+    if not isinstance(inval, int):
+        return str(inval)
+    res = hex(inval)
+    if len(res) % 2:
+        return res[:2] + '0' + res[2:]
+    return res
+
+def make_sprayer(algorithm, params):
+    #TODO: Factor out these defaults into constants somewhere and
+    # tie them to the defaults in the database
     if algorithm == 'fixed':
-        return mk_spray_fixed(params['size'])
+        return mk_spray_fixed(
+            params.get('size', 0x2000)
+            )
     if algorithm == 'crc32':
         return mk_spray_crc32(
-            params['initializer']
-            , params['cutoff']
-            , params['min']
-            , params['max']
+            params.get('initializer', 0xfacade00)
+            , params.get('cutoff', 0x000a0000)
+            , params.get('min', 0x0800)
+            , params.get('max', 0x4000)
             )
     raise ValueError('Unsupported spraying algorithm', algorithm)
 
