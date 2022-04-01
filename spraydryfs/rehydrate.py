@@ -117,9 +117,9 @@ def make_rehydrator_single(algorithm, data):
             for p in parts[1:]
             ]
         }
-    if algorithm == 'nocompress':
+    if parts[0] == 'nocompress':
         return lambda x: x
-    if algorithm == 'zstd':
+    if parts[0] == 'zstd':
         raise NotImplementedError
     raise ValueError('Unsupported algorithm for drying:', algorithm)
 

@@ -13,23 +13,6 @@ from spraydryfs.fuse import SprayDryFS
 DBFILE = 'file:./test.db'
 TESTFILE  = '../sqlfs/traintest'
 
-
-async def main_():
-    sds = SprayDryStore(DBFILE, blake2b, 'nocompress-crc32')
-    try:
-        sds.root('testroot', '0.0.1', Path(TESTFILE))
-    except ValueError:
-        pass
-    rh = Rehydrator(DBFILE)
-    root = rh.root('testroot', '0.0.1')
-    entries = list(x[1] for x in rh.listgen(root.file))
-    print(entries)
-    for i in range(0,100000,3000):
-        res = rh.pread(entries[0].file, i, 100)
-        print(i, 'FOASDAS')
-        print(res)
-    return None
-
 def parse_args():
     parser = ArgumentParser(
         prog='spraydryfs'
@@ -40,12 +23,9 @@ def parse_args():
         , help='SQLite database file backing the file system'
         )
     parser.add_argument(
-        'rootname'
-        , help='Root name'
-        )
-    parser.add_argument(
-        'rootversion'
-        , help='Root version'
+        'root'
+        , help='Root name and version'
+        , type=root
         )
     parser.add_argument(
         'datasource'
@@ -108,11 +88,17 @@ def path_or_root(instr):
         return Path(instr)
     return instr
 
+def root(instr):
+    splitres = instr.rsplit(':', maxsplit=1)
+    if len(splitres) != 2:
+        raise ValueError
+    return splitres
+
 async def main():
     args = parse_args()
     if args.ingest:
-        if not args.datasource:
-            raise ValueError('Need at least one data source')
+        if len(args.datasource) != 1:
+            raise ValueError('Need exactly one data source')
         if args.hash_algorithm is None:
             raise ValueError('Need a hash algorithm for ingesting data')
         sds = SprayDryStore(
@@ -122,15 +108,13 @@ async def main():
             , sprayconf=args.sprayer_config
             , dryconf=args.dryer_config
             )
-        #TODO: More than one data source
         #TODO: Root permissions
         #TODO: Root as data source
-        sds.root(args.rootname, args.rootversion, args.datasource[0])
+        sds.root(args.root[0], args.root[1], args.datasource[0])
         return None
     if args.train:
         if not args.datasource:
             raise ValueError('Need at least one data source')
-        print(args)
         make_rehydrate_entry(
             args.dbfile
             , args.train
@@ -141,8 +125,8 @@ async def main():
         return None
     async with SprayDryFS(
         args.dbfile
-        , args.rootname
-        , args.rootversion
+        , args.root[0]
+        , args.root[1]
         , mount=args.mount
         , loglevel=args.log_level
         ) as fs:
