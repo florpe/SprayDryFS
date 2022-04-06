@@ -297,6 +297,8 @@ def algosplit(instr):
     return parts[0], params
     
 def algojoin(algo):
+    #TODO: Include default values here.
+    # Default values should only be applied to CLI input, never to DB data
     return ' '.join([
         algo[0]
         , *(

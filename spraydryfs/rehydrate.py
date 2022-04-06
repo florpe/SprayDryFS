@@ -1,5 +1,6 @@
 
 from dataclasses import dataclass, field
+from hashlib import blake2b
 from sqlite3 import connect
 
 MMAP_DEFAULT = 256 * 1024 * 1024
@@ -97,6 +98,37 @@ class Rehydrator():
                 yield chunk
             else:
                 yield chunk[max(offset - cstart, 0):min(end - cstart, csize)]
+    def rehydrators(self):
+        q = 'SELECT name, chunking, algorithm, data FROM rehydrate'
+        res = {
+            name: {
+                'sprayer': sprayer
+                , 'dryer': dryer
+                , 'data': '' if not data else 'blake2b-' + blake2b(data).hexdigest()
+                }
+            for name, sprayer, dryer, data in self._reader.execute(q)
+            }
+        return res
+    def roots(self):
+        q = '\n'.join([
+            'SELECT r.name, r.version, f.hash, h.name'
+            , 'FROM root AS r'
+            , '  INNER JOIN file AS f'
+            , '    ON r.file = f.id'
+            , '  INNER JOIN rehydrate AS h'
+            , '    ON f.rehydrate = h.id'
+            ])
+        res = {}
+        for name, version, hsh, rehydrate in self._reader.execute(q):
+            splitres = hsh.split(b'-', maxsplit=1)
+            if len(splitres) != 2:
+                raise ValueError('Malformed root hash', name, version, hsh)
+            hashtype, hashdata = splitres
+            res.setdefault(name, {})[version] = {
+                'hash': hashtype.decode('utf-8') + '-' + hashdata.hex()
+                , 'rehydrate': rehydrate
+                }
+        return res
 
 
 def make_rehydrator(conn):
