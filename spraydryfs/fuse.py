@@ -44,9 +44,10 @@ class SprayDryFS(Operations):
         fuse_options = set(default_options)
         fuse_options.add('fsname=spraydryfs')
         self._logger.debug('FUSE options: %s', fuse_options)
+        #Ideally this would take a Path - libfuse is okay with that, but pyfuse3 is not
         fuseinit(
             self
-            , str(self._mount) #Ideally this would take a Path
+            , str(self._mount)
             , fuse_options
             )
         return self

@@ -26,7 +26,7 @@ class Rehydrator():
         self._reader = connect('file:'+dbpath+'?mode=ro', uri=True)
         self._reader.execute(f'PRAGMA mmap_size={mmap}')
         self._rehydrate = make_rehydrator(self._reader)
-        self._reader.create_function('rehydrator', 2, self._rehydrate, deterministic=True)
+        self._reader.create_function('rehydrator', 3, self._rehydrate, deterministic=True)
         return None
     def __enter__(self):
         return None
@@ -82,7 +82,7 @@ class Rehydrator():
     def preadgen(self, fileid, offset, size):
         end = offset + size
         q = '\n'.join([
-            'SELECT rehydrator(co.rehydrate, ch.data), co.offset, co.size' #TODO: rehydrator with chunk size!
+            'SELECT rehydrator(co.rehydrate, co.size, ch.data), co.offset, co.size'
             , 'FROM content AS co'
             , '  INNER JOIN chunk AS ch'
             , '    ON co.chunk = ch.id'
@@ -138,10 +138,11 @@ def make_rehydrator(conn):
             'SELECT id, algorithm, data FROM rehydrate'
             )
         }
-    return lambda i, x: lookup[i](x)
+    return lambda i, size, data: lookup[i](size, data)
 
 def make_rehydrator_single(algorithm, data):
     parts = algorithm.split()
+    algorithm = parts[0]
     params = {
         pname: int(pval, 16)
         for pname, pval in [
@@ -149,11 +150,19 @@ def make_rehydrator_single(algorithm, data):
             for p in parts[1:]
             ]
         }
-    if parts[0] == 'nocompress':
-        return lambda x: x
-    if parts[0] == 'zstd':
+    if algorithm == 'nocompress':
+        def rehydrator(chunksize, chunkdata):
+            if not chunksize == len(chunkdata):
+                raise RuntimeError('Bad chunk size', chunksize, chunkdata)
+            return chunkdata
+    elif algorithm == 'zstd':
         decompressor = EndlessZstdDecompressor(zstd_dict=ZstdDict(data))
-        return lambda x: decompressor.decompress(x) #TODO: max_length parameter
-#        raise NotImplementedError
-    raise ValueError('Unsupported algorithm for drying:', algorithm)
+        def rehydrator(chunksize, chunkdata):
+            chunk = decompressor.decompress(chunkdata, max_length=chunksize)
+            if not chunksize == len(chunk):
+                raise RuntimeError('Bad chunk size', chunksize, chunk, chunkdata)
+            return chunk
+    else:
+        raise ValueError('Unsupported algorithm for drying', algorithm)
+    return rehydrator
 
