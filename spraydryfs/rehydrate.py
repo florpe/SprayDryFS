@@ -1,6 +1,7 @@
 
 from dataclasses import dataclass, field
 from hashlib import blake2b
+from pyzstd import EndlessZstdDecompressor, ZstdDict
 from sqlite3 import connect
 
 MMAP_DEFAULT = 256 * 1024 * 1024
@@ -81,7 +82,7 @@ class Rehydrator():
     def preadgen(self, fileid, offset, size):
         end = offset + size
         q = '\n'.join([
-            'SELECT rehydrator(co.rehydrate, ch.data), co.offset, co.size'
+            'SELECT rehydrator(co.rehydrate, ch.data), co.offset, co.size' #TODO: rehydrator with chunk size!
             , 'FROM content AS co'
             , '  INNER JOIN chunk AS ch'
             , '    ON co.chunk = ch.id'
@@ -99,15 +100,14 @@ class Rehydrator():
             else:
                 yield chunk[max(offset - cstart, 0):min(end - cstart, csize)]
     def rehydrators(self):
-        q = 'SELECT name, chunking, algorithm, data FROM rehydrate'
-        res = {
-            name: {
+        q = 'SELECT name, version, chunking, algorithm, data FROM rehydrate'
+        res = {}
+        for name, version, sprayer, dryer, data in self._reader.execute(q):
+            res.setdefault(name, {})[version] = {
                 'sprayer': sprayer
                 , 'dryer': dryer
                 , 'data': '' if not data else 'blake2b-' + blake2b(data).hexdigest()
                 }
-            for name, sprayer, dryer, data in self._reader.execute(q)
-            }
         return res
     def roots(self):
         q = '\n'.join([
@@ -152,6 +152,8 @@ def make_rehydrator_single(algorithm, data):
     if parts[0] == 'nocompress':
         return lambda x: x
     if parts[0] == 'zstd':
-        raise NotImplementedError
+        decompressor = EndlessZstdDecompressor(zstd_dict=ZstdDict(data))
+        return lambda x: decompressor.decompress(x) #TODO: max_length parameter
+#        raise NotImplementedError
     raise ValueError('Unsupported algorithm for drying:', algorithm)
 

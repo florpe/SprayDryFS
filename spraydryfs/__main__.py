@@ -4,6 +4,7 @@ from asyncio import gather, run
 from cProfile import run as prun
 from hashlib import sha256, blake2b, new as newhash
 from json import dumps
+from logging import getLogger, StreamHandler, Formatter
 from pathlib import Path
 
 from spraydryfs.db import connect
@@ -35,13 +36,22 @@ class IngestSource(ArgAction):
             hsh = hash_algorithm(values[2])
         except ValueError as e:
             raise ValueError from e
-        namespace.ingest.append({
+        res = {
             'root_name': values[0]
             , 'root_version': values[1]
             , 'hash': hsh
-            , 'rehydrate': values[3]
-            , 'source': Path(values[4]).resolve()
-            })
+            , 'rehydrate_name': values[3]
+            , 'rehydrate_version': values[4]
+            , 'source': Path(values[5]).resolve()
+            }
+        if namespace.ingest:
+            existing = namespace.ingest[0]
+            for key in ('rehydrate_name', 'rehydrate_version'):
+                if not existing[key] == res[key]:
+                    raise ValueError('Mismatched ingestion config value that should be shared between roots', key)
+            if not existing['hash']().name == res['hash']().name:
+                raise ValueError('Mismatched ingestion config value that should be shared between roots', 'hash')
+        namespace.ingest.append(res)
         return None
 
 class TrainSource(ArgAction):
@@ -87,9 +97,9 @@ def parse_args():
         )
     grp.add_argument(
         '-i', '--ingest'
-        , nargs=5 #Validate: First is root name, second is root version, third is hash name, fourth is datasource - one!
+        , nargs=6
         , help='Rehydration configuration name to be used for ingesting.'
-        , metavar=('ROOTNAME', 'ROOTVERSION', 'HASH', 'REHYDRATE', 'SOURCE')
+        , metavar=('ROOTNAME', 'ROOTVERSION', 'HASH', 'REHYDRATENAME', 'REHYDRATEVERSION', 'SOURCE')
         , action=IngestSource
         , default=[]
         )
@@ -103,9 +113,35 @@ def parse_args():
         )
     return parser.parse_args()
 
+def mkLogger(loglevel):
+    logger = getLogger('spraydry')
+    logger.setLevel(loglevel)
+    handler = StreamHandler()
+    handler.setLevel(loglevel)
+    formatter = Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    return logger
+
 async def main():
     args = parse_args()
+    logger = mkLogger(args.log_level)
     if args.mount:
+        await gather(*(
+            runSprayDryFS(
+                args.dbfile
+                , mnt['root_name']
+                , mnt['root_version']
+                , mount=mnt['mount']
+                , logger=logger.getChild(
+                    'fs'
+                    ).getChild(
+                        str(mnt['mount'])
+                        )
+                )
+            for mnt in args.mount
+            ))
+        return None
         if len(args.mount) != 1:
             raise NotImplementedError('Multiple mount points are not yet supported')
         mnt = args.mount[0]
@@ -114,23 +150,25 @@ async def main():
             , mnt['root_name']
             , mnt['root_version']
             , mount=mnt['mount']
-            , loglevel=args.log_level
+            , logger=logger.getChild('fs')
             ) as fs:
             await fs.run()
         return None
-    for ngst in args.ingest:
-        sds = SprayDryStore(
+    if args.ingest:
+        ngst = args.ingest[0]
+        sds = SprayDryStore( #These config items are shared between roots
             args.dbfile
             , ngst['hash']
-            , ngst['rehydrate']
+            , ngst['rehydrate_name']
+            , ngst['rehydrate_version']
             )
-        #TODO: Explicit root permissions?
-        sds.root(ngst['root_name'], ngst['root_version'], ngst['source'])
+        for rootcfg in args.ingest:
+            sds.root(rootcfg['root_name'], rootcfg['root_version'], rootcfg['source'])
     for trn in args.train:
         make_rehydrate_entry(
             args.dbfile
             , trn['rehydrate_name']
-            # , trn['rehydrate_version'] # Not yet in use!
+            , trn['rehydrate_version']
             , trn['sprayer_config']
             , trn['dryer_config']
             , trn['source']

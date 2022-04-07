@@ -3,10 +3,12 @@ from sqlite3 import connect as sqlite3_connect
 
 CREATE_REHYDRATE = '''CREATE TABLE IF NOT EXISTS rehydrate (
     id INTEGER PRIMARY KEY
-    , name TEXT NOT NULL UNIQUE
+    , name TEXT NOT NULL
+    , version TEXT NOT NULL
     , chunking TEXT NOT NULL
     , algorithm TEXT NOT NULL
     , data BLOB NOT NULL
+    , UNIQUE (name, version)
 );'''
 
 SETUP_REHYDRATE = '''INSERT OR IGNORE INTO rehydrate (id, name, chunking, algorithm, data)

@@ -43,6 +43,7 @@ class SprayDryFS(Operations):
         fuseenable()
         fuse_options = set(default_options)
         fuse_options.add('fsname=spraydryfs')
+        self._logger.debug('FUSE options: %s', fuse_options)
         fuseinit(
             self
             , str(self._mount) #Ideally this would take a Path

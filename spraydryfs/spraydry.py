@@ -2,7 +2,7 @@
 
 from cachetools import cached
 from mmap import mmap
-from pyzstd import ZstdDecompressor, ZstdDict
+from pyzstd import ZstdCompressor, ZstdDict, train_dict, finalize_dict
 from stat import S_ISDIR, S_ISREG
 from zlib import crc32
 
@@ -10,7 +10,7 @@ from spraydryfs.db import connect
 
 
 class SprayDryStore():
-    def __init__(self, dbpath, mkhashobj, rehydratename, sprayconf=None, dryconf=None):
+    def __init__(self, dbpath, mkhashobj, rehydratename, rehydrateversion, sprayconf=None, dryconf=None):
         self._db = dbpath
         self._mkhashobj = mkhashobj
         self._hashname = mkhashobj().name.encode('utf-8')
@@ -19,6 +19,7 @@ class SprayDryStore():
         self._rehydrate, self._sprayer, self._dryer = make_mksprayer_dryer(
             self._writer
             , rehydratename
+            , rehydrateversion
             , sprayconf
             , dryconf
             )
@@ -181,27 +182,28 @@ class SprayDryStore():
 def make_modebytes(stat):
     return stat.st_mode.to_bytes(2, 'little')
 
-def make_rehydrate_entry(dbfile, name, sprayconf, dryconf, datasources):
+def make_rehydrate_entry(dbfile, name, version, sprayconf, dryconf, datasources):
     with connect(dbfile) as conn:
         return make_mksprayer_dryer(
             conn
             , name
+            , version
             , sprayconf
             , dryconf
             , datasources=datasources
             )
 
-def make_mksprayer_dryer(conn, name, sprayconf, dryconf, datasources=None):
+def make_mksprayer_dryer(conn, name, version, sprayconf, dryconf, datasources=None):
     existing = conn.execute(
-        'SELECT id, chunking, algorithm, data FROM rehydrate WHERE name = ?'
-        , (name,)
+        'SELECT id, chunking, algorithm, data FROM rehydrate WHERE name = ? AND version = ?'
+        , (name, version)
         ).fetchone()
     if existing is not None:
         rehydrateID, sprayconf_raw, dryconf_raw, data_raw = existing
         if sprayconf is None:
             sprayconf = algosplit(sprayconf_raw)
         else:
-            assert algojoin(sprayconf) == sprayconf_raw
+            assert sprayconf == algosplit(sprayconf_raw)
         if dryconf is None:
             dryconf = algosplit(dryconf_raw)
         else:
@@ -226,13 +228,14 @@ def make_mksprayer_dryer(conn, name, sprayconf, dryconf, datasources=None):
                 'Could not create appropriate rehydration data'
                 , sprayconf, dryconf, datasources
                 )
+        #TODO: Also save a hash
         (rehydrateID,) = conn.execute(
             '\n'.join([
-                'INSERT INTO rehydrate (name, chunking, algorithm, data)'
-                , 'VALUES (?,?,?,?)'
+                'INSERT INTO rehydrate (name, version, chunking, algorithm, data)'
+                , 'VALUES (?,?,?,?,?)'
                 , 'RETURNING id'
                 ])
-            , (name, algojoin(sprayconf), algojoin(dryconf), data)
+            , (name, version, algojoin(sprayconf), algojoin(dryconf), data)
             ).fetchone()
     sprayer = make_sprayer(*sprayconf)
     dryer = make_dryer(*dryconf, data)
@@ -244,12 +247,31 @@ def mkdata(conn, sprayconf, dryconf, datasources):
             'No data ingestion from existing roots yet'
             , datasources
             )
-    if dryconf[0] == 'nocompress':
+    algorithm = dryconf[0]
+    params = dryconf[1]
+    if algorithm == 'nocompress':
         return b''
+    if algorithm == 'zstd':
+        dictsize = params.get('dictsize')
+        if dictsize is None:
+            raise ValueError('Drying algorithm zstd needs parameter dictsize')
+        dictlevel = params.get('dictlevel')
+        if dictlevel is None:
+            raise ValueError('Drying algorithm zstd needs parameter dictlevel')
+        #TODO: Figure out whether we really need two passes here
+        dct_initial = train_dict(trainergen(sprayconf, datasources), dictsize)
+        dct = finalize_dict(dct_initial, trainergen(sprayconf, datasources), dictsize, dictlevel)
+        return dct.dict_content
     raise NotImplementedError(
         'Cannot create rehydration data'
         , sprayconf, dryconf
         )
+
+def trainergen(sprayconf, datasources):
+    sprayer = make_sprayer(*sprayconf)
+    for src in datasources:
+        for _, chunk in with_mmap(src, sprayer):
+            yield chunk
 
 def make_dryer(name, params, data):
     if name == 'nocompress':
@@ -262,7 +284,7 @@ def make_dryer(name, params, data):
             level_or_option=(params if level is None else level)
             , zstd_dict=compressdict
             )
-        return  lambda x: compressor.compress(x, ZstdCompressor.FLUSH_FRAME)
+        return lambda x: compressor.compress(x, ZstdCompressor.FLUSH_FRAME)
     raise ValueError('Unsupported algorithm for drying:', name)
 
 def make_mksprayer_dryer_old(conn, name):
@@ -333,7 +355,6 @@ def make_sprayer(algorithm, params):
 
 
 def with_mmap(path, mksprayer):
-    print(path)
     with open(path, 'rb+') as handle:
         with mmap(handle.fileno(), 0) as mm:
             for res in mksprayer(mm):
