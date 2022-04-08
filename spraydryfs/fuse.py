@@ -1,4 +1,9 @@
 
+'''
+Translation from the content-oriented logic of spraydryfs.rehydrate to the
+tree-oriented logic of the POSIX file system standard as demanded by libfuse.
+'''
+
 from errno import ENOENT, EACCES
 from logging import getLogger, StreamHandler, Formatter
 from os import getuid, getgid, O_RDWR, O_WRONLY
@@ -19,12 +24,31 @@ from pyfuse3_asyncio import enable as fuseenable
 from spraydryfs.rehydrate import Rehydrator
 
 async def runSprayDryFS(dbpath, rootname, rootversion, mmap=None, mount=None, logger=None, loglevel='INFO'):
-    async with SprayDryFS(dbpath, rootname, rootversion, mmap=mmap, mount=mount, logger=logger, loglevel=loglevel) as fs:
+    '''
+    A wrapper around the SprayDryFS runner, to be ultimately used in
+    await gather(*(runSprayDryFS(..) for ... in ...)) . Currently impossible
+    due to a bug in pyfuse3.
+    '''
+    async with SprayDryFS(
+        dbpath
+        , rootname
+        , rootversion
+        , mmap=mmap
+        , mount=mount
+        , logger=logger
+        , loglevel=loglevel
+        ) as fs:
         await fs.run()
     return None
 
 class SprayDryFS(Operations):
+    '''
+    Translation layer between spraydryfs.Rehydrator and pyfuse3.
+    '''
     def __init__(self, dbpath, rootname, rootversion, mmap=None, mount=None, logger=None, loglevel='INFO'):
+        '''
+        Setting up shop with a reader and a root.
+        '''
         self._logger = logger if logger is not None else self._mklogger(loglevel)
         self._db = dbpath
         self._mount = None if mount is None else mount.resolve(strict=True)
@@ -36,6 +60,9 @@ class SprayDryFS(Operations):
         self._gid = getgid()
         self._inode_offset = ROOT_INODE #Offset to ensure that reserved inodes are not used
     async def __aenter__(self):
+        '''
+        Set up FUSE if a mountpoint is given.
+        '''
         if self._mount is None:
             return self
         fuseenable()
@@ -50,9 +77,15 @@ class SprayDryFS(Operations):
             )
         return self
     async def __aexit__(self, exc_type, exc, tb):
+        '''
+        Cleanup.
+        '''
         self.close()
         return None
     def close(self):
+        '''
+        Unmount the filesystem, close the FUSE and SQLite connections.
+        '''
         self._logger.debug('Closing')
         if self._mount is not None:
             self._logger.info('Unmounting')
@@ -61,12 +94,18 @@ class SprayDryFS(Operations):
         self._logger.info('Closed')
         return None
     async def run(self):
+        '''
+        If a mountpoint is given, run FUSE.
+        '''
         if self._mount is not None:
             self._logger.info('Running on %s', self._mount)
             return await fusemain()
         self._logger.warn('No mountpoint configured, nothing to do')
         return None
     def _mklogger(self, level):
+        '''
+        A tiny default logger.
+        '''
         logger = getLogger('spraydryfs')
         logger.setLevel(level)
         handler = StreamHandler()
@@ -76,6 +115,9 @@ class SprayDryFS(Operations):
         logger.addHandler(handler)
         return logger
     def _mkattrs(self, inentry):
+        '''
+        Translate spraydryfs.rehydrate.Entry to pyfuse3.EntryAttributes.
+        '''
         entry = EntryAttributes()
         entry.st_mode = inentry.mode
         entry.st_size = inentry.size
@@ -87,6 +129,9 @@ class SprayDryFS(Operations):
         entry.st_ino = ROOT_INODE if inentry.inode is None else inentry.inode + self._inode_offset
         return entry
     async def getattr(self, inode, ctx=None):
+        '''
+        Exactly what it says on the tin.
+        '''
         self._logger.debug('GetAttr: Inode %s', inode)
         if inode == ROOT_INODE:
             return self._mkattrs(self._root)
@@ -98,6 +143,9 @@ class SprayDryFS(Operations):
         self._logger.debug('GetAttr: Inode %s , result %s', inode, res)
         return res
     async def lookup(self, parent_inode, name, ctx=None):
+        '''
+        Exactly what it says on the tin.
+        '''
         self._logger.debug('Lookup at inode %s for name %s', parent_inode, name)
         if parent_inode == ROOT_INODE:
             entry = self._rehydrator.entry(self._root.file, name)
@@ -107,6 +155,9 @@ class SprayDryFS(Operations):
             raise FUSEError(ENOENT)
         return self._mkattrs(entry)
     async def opendir(self, inode, ctx):
+        '''
+        Exactly what it says on the tin.
+        '''
         self._logger.debug('Opendir at inode %s', inode)
         if inode == ROOT_INODE:
             entry = self._root
@@ -116,6 +167,9 @@ class SprayDryFS(Operations):
             raise FUSEError(ENOENT)
         return inode
     async def readdir(self, fh, start_id, token):
+        '''
+        Exactly what it says on the tin.
+        '''
         self._logger.debug('Reading directory at inode %s, offset %s', fh, start_id)
         dirid = self._root.inode if fh == ROOT_INODE else fh - self._inode_offset
         for entrynum, entry in self._rehydrator.listgen(fh, offset=start_id):
@@ -123,6 +177,9 @@ class SprayDryFS(Operations):
             if not readdir_reply(token, entry.name, self._mkattrs(entry), entrynum):
                 return
     async def open(self, inode, flags, ctx):
+        '''
+        Exactly what it says on the tin.
+        '''
         self._logger.debug('Opening file at inode %s with flags %s', inode, flags)
         if flags & O_RDWR or flags & O_WRONLY:
             raise FUSEError(EACCES)
@@ -131,8 +188,9 @@ class SprayDryFS(Operations):
             raise FUSEError(ENOENT)
         return FileInfo(fh=inode, keep_cache=True)
     async def read(self, fh, off, size):
+        '''
+        Exactly what it says on the tin.
+        '''
         self._logger.debug('Reading from inode %s , offset %s , size %s', fh, off, size)
         fileid = self._root.inode if fh == ROOT_INODE else fh - self._inode_offset
         return self._rehydrator.pread(fh, off, size)
-
-
