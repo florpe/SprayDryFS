@@ -18,19 +18,17 @@ from pyfuse3_asyncio import enable as fuseenable
 
 from spraydryfs.rehydrate import Rehydrator
 
-MMAP_DEFAULT = 128 * 1024 * 1024
-
-async def runSprayDryFS(dbpath, rootname, rootversion, mmap=MMAP_DEFAULT, mount=None, logger=None, loglevel='INFO'):
+async def runSprayDryFS(dbpath, rootname, rootversion, mmap=None, mount=None, logger=None, loglevel='INFO'):
     async with SprayDryFS(dbpath, rootname, rootversion, mmap=mmap, mount=mount, logger=logger, loglevel=loglevel) as fs:
         await fs.run()
     return None
 
 class SprayDryFS(Operations):
-    def __init__(self, dbpath, rootname, rootversion, mmap=MMAP_DEFAULT, mount=None, logger=None, loglevel='INFO'):
+    def __init__(self, dbpath, rootname, rootversion, mmap=None, mount=None, logger=None, loglevel='INFO'):
         self._logger = logger if logger is not None else self._mklogger(loglevel)
         self._db = dbpath
         self._mount = None if mount is None else mount.resolve(strict=True)
-        self._rehydrator = Rehydrator(dbpath, mmap=MMAP_DEFAULT)
+        self._rehydrator = Rehydrator(dbpath, mmap=mmap)
         self._root = self._rehydrator.root(rootname, rootversion)
         if self._root is None:
             raise ValueError('No such root', rootname, rootversion)

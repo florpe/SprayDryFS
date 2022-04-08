@@ -4,8 +4,6 @@ from hashlib import blake2b
 from pyzstd import EndlessZstdDecompressor, ZstdDict
 from sqlite3 import connect
 
-MMAP_DEFAULT = 256 * 1024 * 1024
-
 @dataclass
 class Entry():
     inode: int
@@ -21,10 +19,11 @@ class Entry():
         return None
 
 class Rehydrator():
-    def __init__(self, dbpath, mmap=MMAP_DEFAULT):
+    def __init__(self, dbpath, mmap=None):
         self._db = dbpath
         self._reader = connect('file:'+dbpath+'?mode=ro', uri=True)
-        self._reader.execute(f'PRAGMA mmap_size={mmap}')
+        if mmap is not None:
+            self._reader.execute(f'PRAGMA mmap_size={mmap}')
         self._rehydrate = make_rehydrator(self._reader)
         self._reader.create_function('rehydrator', 3, self._rehydrate, deterministic=True)
         return None
