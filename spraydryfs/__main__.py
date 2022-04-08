@@ -177,7 +177,7 @@ async def main():
         rh = Rehydrator(args.dbfile, mmap=0)
         roots = rh.roots()
         rehydrators = rh.rehydrators()
-        print(dumps({'root': roots, 'rehydrate': rehydrators}, indent=2))
+        print(dumps({'root': roots, 'rehydrate': rehydrators}, indent=2, sort_keys=True))
     return None
 
 

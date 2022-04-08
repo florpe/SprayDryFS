@@ -23,7 +23,15 @@ from pyfuse3_asyncio import enable as fuseenable
 
 from spraydryfs.rehydrate import Rehydrator
 
-async def runSprayDryFS(dbpath, rootname, rootversion, mmap=None, mount=None, logger=None, loglevel='INFO'):
+async def runSprayDryFS(
+    dbpath
+    , rootname
+    , rootversion
+    , mmap=None
+    , mount=None
+    , logger=None
+    , loglevel='INFO'
+    ):
     '''
     A wrapper around the SprayDryFS runner, to be ultimately used in
     await gather(*(runSprayDryFS(..) for ... in ...)) . Currently impossible
@@ -45,7 +53,16 @@ class SprayDryFS(Operations):
     '''
     Translation layer between spraydryfs.Rehydrator and pyfuse3.
     '''
-    def __init__(self, dbpath, rootname, rootversion, mmap=None, mount=None, logger=None, loglevel='INFO'):
+    def __init__(
+        self
+        , dbpath
+        , rootname
+        , rootversion
+        , mmap=None
+        , mount=None
+        , logger=None
+        , loglevel='INFO'
+        ):
         '''
         Setting up shop with a reader and a root.
         '''

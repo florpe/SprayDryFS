@@ -1,8 +1,9 @@
 
 from dataclasses import dataclass, field
 from hashlib import blake2b
-from pyzstd import EndlessZstdDecompressor, ZstdDict
 from sqlite3 import connect
+
+from pyzstd import EndlessZstdDecompressor, ZstdDict
 
 @dataclass
 class Entry():
@@ -19,7 +20,13 @@ class Entry():
         return None
 
 class Rehydrator():
+    '''
+    A class to transparently reassemble files from the chunks in the database.
+    '''
     def __init__(self, dbpath, mmap=None):
+        '''
+        Setting up a readonly connection and the rehydrator function.
+        '''
         self._db = dbpath
         self._reader = connect('file:'+dbpath+'?mode=ro', uri=True)
         if mmap is not None:
@@ -28,14 +35,26 @@ class Rehydrator():
         self._reader.create_function('rehydrator', 3, self._rehydrate, deterministic=True)
         return None
     def __enter__(self):
+        '''
+        Nothing to do here.
+        '''
         return None
     def __exit__(self, exc_type, exc, tb):
+        '''
+        Closing up.
+        '''
         self.close()
         return None
     def close(self):
+        '''
+        Closing the database connection.
+        '''
         self._reader.close()
         return None
     def root(self, name, version):
+        '''
+        Get the specified root, if possible.
+        '''
         for (risdir, rmode, rsize, rfile) in self._reader.execute(
             'SELECT isdirectory, mode, size, file FROM root WHERE name = ? AND version = ?'
             , (name, version)
@@ -43,6 +62,9 @@ class Rehydrator():
             return Entry(None, None, name, risdir, rmode, rsize, rfile)
         return None
     def attributes(self, entryid):
+        '''
+        Get a specific entry.
+        '''
         q = '\n'.join([
             'SELECT id, directory, name, isdirectory, mode, size, file'
             , 'FROM entry'
@@ -53,6 +75,9 @@ class Rehydrator():
             return None
         return Entry(*res)
     def entry(self, dirid, name):
+        '''
+        Find an entry by directory and name.
+        '''
         q = '\n'.join([
             'SELECT id, directory, name, isdirectory, mode, size, file'
             , 'FROM entry'
@@ -64,6 +89,10 @@ class Rehydrator():
             return None
         return Entry(*res)
     def listgen(self, dirid, offset=0):
+        '''
+        List the complete contents of the directory. The FUSE translation
+        appears to only ever fetch one entry here...
+        '''
         q = '\n'.join([
             'SELECT rownum, id, directory, name, isdirectory, mode, size, file'
             , 'FROM ('
@@ -77,8 +106,15 @@ class Rehydrator():
         for res in self._reader.execute(q, (dirid, offset)):
             yield res[0], Entry(*res[1:])
     def pread(self, fileid, offset, size):
+        '''
+        Read a part of the file.
+        '''
         return b''.join(self.preadgen(fileid, offset, size))
     def preadgen(self, fileid, offset, size):
+        '''
+        Read a part of the file in blocks roughly corresponding to the chunks
+        in the database.
+        '''
         end = offset + size
         q = '\n'.join([
             'SELECT rehydrator(co.rehydrate, co.size, ch.data), co.offset, co.size'
@@ -99,6 +135,11 @@ class Rehydrator():
             else:
                 yield chunk[max(offset - cstart, 0):min(end - cstart, csize)]
     def rehydrators(self):
+        '''
+        List all rehydration configurations from the database. Data is given
+        as a hex-encoded blake2b hash for the sake of brevity.
+        Intended for data display.
+        '''
         q = 'SELECT name, version, chunking, algorithm, data FROM rehydrate'
         res = {}
         for name, version, sprayer, dryer, data in self._reader.execute(q):
@@ -109,8 +150,13 @@ class Rehydrator():
                 }
         return res
     def roots(self):
+        '''
+        List all root configurations from the database. Hashes are given in
+        hex, rehydrate configurations by name and version.
+        Intended for data display.
+        '''
         q = '\n'.join([
-            'SELECT r.name, r.version, f.hash, h.name'
+            'SELECT r.name, r.version, f.hash, h.name, h.version'
             , 'FROM root AS r'
             , '  INNER JOIN file AS f'
             , '    ON r.file = f.id'
@@ -118,14 +164,15 @@ class Rehydrator():
             , '    ON f.rehydrate = h.id'
             ])
         res = {}
-        for name, version, hsh, rehydrate in self._reader.execute(q):
+        for name, version, hsh, r_name, r_version in self._reader.execute(q):
             splitres = hsh.split(b'-', maxsplit=1)
             if len(splitres) != 2:
                 raise ValueError('Malformed root hash', name, version, hsh)
             hashtype, hashdata = splitres
             res.setdefault(name, {})[version] = {
                 'hash': hashtype.decode('utf-8') + '-' + hashdata.hex()
-                , 'rehydrate': rehydrate
+                , 'rehydrate_name': r_name
+                , 'rehydrate_version': r_version
                 }
         return res
 
@@ -145,7 +192,7 @@ def make_rehydrator_single(algorithm, data):
     params = {
         pname: int(pval, 16)
         for pname, pval in [
-            p.split(':')
+            p.split(':', maxsplit=1)
             for p in parts[1:]
             ]
         }
@@ -155,7 +202,17 @@ def make_rehydrator_single(algorithm, data):
                 raise RuntimeError('Bad chunk size', chunksize, chunkdata)
             return chunkdata
     elif algorithm == 'zstd':
-        decompressor = EndlessZstdDecompressor(zstd_dict=ZstdDict(data))
+        options = {
+            k[7:]: v
+            for k, v in params.items()
+            if k[:7] == 'option.'
+            }
+        if not options:
+            options = None
+        decompressor = EndlessZstdDecompressor(
+            zstd_dict=ZstdDict(data)
+            , option=options
+            )
         def rehydrator(chunksize, chunkdata):
             chunk = decompressor.decompress(chunkdata, max_length=chunksize)
             if not chunksize == len(chunk):

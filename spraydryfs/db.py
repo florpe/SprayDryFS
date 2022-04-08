@@ -62,7 +62,7 @@ no gaps and do not overlap. A one-shot verification can be done via a
 outer self-join of content using offset + size as the upper chunk limit.
 '''
 
-CREATE_FILE = f'''CREATE TABLE IF NOT EXISTS file (
+CREATE_FILE = '''CREATE TABLE IF NOT EXISTS file (
     id INTEGER PRIMARY KEY
     , hash BLOB NOT NULL
     , rehydrate INTEGER NOT NULL
