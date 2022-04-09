@@ -157,7 +157,6 @@ class SprayDryFS(Operations):
             logger.warn('Inode %s not found', inode)
             raise FUSEError(ENOENT)
         res = self._mkattrs(entry)
-        self._logger.debug('GetAttr: Inode %s , result %s', inode, res)
         return res
     async def lookup(self, parent_inode, name, ctx=None):
         '''
@@ -185,11 +184,20 @@ class SprayDryFS(Operations):
         return inode
     async def readdir(self, fh, start_id, token):
         '''
-        Exactly what it says on the tin.
+        Exactly what it says on the tin. Reading a normal file as a directory
+        does not raise an error, but instead returns no entries.
         '''
-        self._logger.debug('Reading directory at inode %s, offset %s', fh, start_id)
-        dirid = self._root.inode if fh == ROOT_INODE else fh - self._inode_offset
-        for entrynum, entry in self._rehydrator.listgen(fh, offset=start_id):
+        if fh == ROOT_INODE:
+            entryid = None
+            gen = self._rehydrator.listgen(self._root.file, offset=start_id)
+        else:
+            entryid = fh = self._offset
+            gen = self._rehydrator.listgen(fh - self._inode_offset, offset=start_id)
+        self._logger.debug(
+            'Reading directory at inode %s, offset %s, entryid %s'
+            , fh, start_id, entryid
+            )
+        for entrynum, entry in gen:
             attrs = self._mkattrs(entry)
             if not readdir_reply(token, entry.name, self._mkattrs(entry), entrynum):
                 return
@@ -200,14 +208,22 @@ class SprayDryFS(Operations):
         self._logger.debug('Opening file at inode %s with flags %s', inode, flags)
         if flags & O_RDWR or flags & O_WRONLY:
             raise FUSEError(EACCES)
-        fileid = self._root.inode if inode == ROOT_INODE else inode - self._inode_offset
-        if self._rehydrator.attributes(inode - self._inode_offset) is None:
-            raise FUSEError(ENOENT)
+        await self.getattr(inode) #Check inode existence
         return FileInfo(fh=inode, keep_cache=True)
     async def read(self, fh, off, size):
         '''
         Exactly what it says on the tin.
         '''
-        self._logger.debug('Reading from inode %s , offset %s , size %s', fh, off, size)
-        fileid = self._root.inode if fh == ROOT_INODE else fh - self._inode_offset
-        return self._rehydrator.pread(fh, off, size)
+        if fh == ROOT_INODE:
+            fileid = self._root.file
+            self._logger.debug(
+                'Reading from root inode %s, offset %s, size %s, fileid %s'
+                , fh, off, size, fileid
+                )
+            return self._rehydrator.pread(self._root.file, off, size)
+        entryid = fh - self._inode_offset
+        self._logger.debug(
+            'Reading from inode %s, offset %s, size %s, entryid %s'
+            , fh, off, size, entryid
+            )
+        return self._rehydrator.pread_entry(entryid, off, size)

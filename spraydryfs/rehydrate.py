@@ -105,6 +105,32 @@ class Rehydrator():
             ])
         for res in self._reader.execute(q, (dirid, offset)):
             yield res[0], Entry(*res[1:])
+    def listgen_entry(self, entryid, offset=0):
+        '''
+        List the complete contents of the entry's directory. The FUSE
+        translation appears to only ever fetch one entry here...
+        '''
+        q = '\n'.join([
+            'SELECT rownum, id, directory, name, isdirectory, mode, size, file'
+            , 'FROM ('
+            , '  SELECT ROW_NUMBER() OVER ( ORDER BY e.name ) AS rownum'
+            , '    , e.id'
+            , '    , e.directory'
+            , '    , e.name'
+            , '    , e.isdirectory'
+            , '    , e.mode'
+            , '    , e.size'
+            , '    , e.file'
+            , '  FROM entry as e'
+            , '    INNER JOIN entry AS parent'
+            , '      ON e.directory = parent.file'
+            , '  WHERE parent.id = ?'
+            , '    AND parent.isdirectory IS TRUE'
+            , ')'
+            , 'WHERE rownum > ?'
+            ])
+        for res in self._reader.execute(q, (entryid, offset)):
+            yield res[0], Entry(*res[1:])
     def pread(self, fileid, offset, size):
         '''
         Read a part of the file.
@@ -129,6 +155,37 @@ class Rehydrator():
         for (chunk, cstart, csize) in self._reader.execute(
             q
             , (fileid, offset, size)
+            ):
+            if offset < cstart and cstart + csize < end:
+                yield chunk
+            else:
+                yield chunk[max(offset - cstart, 0):min(end - cstart, csize)]
+    def pread_entry(self, entryid, offset, size):
+        '''
+        Read a part of the entry's file.
+        '''
+        return b''.join(self.preadgen_entry(entryid, offset, size))
+    def preadgen_entry(self, entryid, offset, size):
+        '''
+        Read a part of the entry's file in blocks roughly corresponding to the
+        chunks in the database.
+        '''
+        end = offset + size
+        q = '\n'.join([
+            'SELECT rehydrator(co.rehydrate, co.size, ch.data), co.offset, co.size'
+            , 'FROM entry AS e'
+            , '  INNER JOIN content AS co'
+            , '    ON e.file = co.file'
+            , '  INNER JOIN chunk AS ch'
+            , '    ON co.chunk = ch.id'
+            , 'WHERE e.id = ?1'
+            , '  AND ?2 < (co.offset + co.size)'
+            , '  AND co.offset < (?2 + ?3)'
+            , 'ORDER BY co.offset'
+            ])
+        for (chunk, cstart, csize) in self._reader.execute(
+            q
+            , (entryid, offset, size)
             ):
             if offset < cstart and cstart + csize < end:
                 yield chunk

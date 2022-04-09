@@ -94,9 +94,9 @@ Directory contents are stored in the entry table. The isdirectory flag is
 necessary because the target file does not know how its contents should be
 interpreted.
 The database does not enforce acyclicality. Since acyclicality is equivalent
-to the existence of a topological order, an additional entrytree (parent,
-child) table would do the trick. The direction of the check - either id <
-child_entry or child_entry < id - would constrain the ingestion implementation.
+to the existence of a topological order, an additional check on directory and
+file would do the trick. The direction of the check - either file < directory
+or directory < file - would constrain the ingestion implementation.
 Additionally there's a tradeoff between relying on INTEGER PRIMARY KEY
 monotonicity within one transaction in the absence of deletions and using
 INTEGER PRIMARY KEY AUTOINCREMENT for properly guaranteed mononicity at the
